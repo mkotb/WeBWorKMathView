@@ -103,5 +103,7 @@ var webworkSetup = function () {
     });
 };
 
-// Inject MathView with the webwork setup function
-MathViewExt.inject(webworkSetup);
+if (document.getElementsByClassName("codeshard").length > 0) {
+    // Inject MathView with the webwork setup function if there are answer fields
+    MathViewExt.inject(webworkSetup);
+}

@@ -34,5 +34,10 @@
     "optional_permissions": [
         "tabs",
         "<all_urls>"
-    ]
+    ],
+    "browser_specific_settings": {
+        "gecko": {
+            "id": "webworkmathview@dev.ca"
+        }
+    }
 }

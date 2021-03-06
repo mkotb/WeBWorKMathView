@@ -12,7 +12,6 @@ var ExtConfig = new function () {
      */
 
     this.Storage = new function () {
-
         /**
          * Constructor for an object to represent our stored data
          * @param {boolean} autoDetectWW if true, the scripts will automatically run on WeBWorK sites
@@ -34,14 +33,21 @@ var ExtConfig = new function () {
          * @param {setCallback} callback a function to call after the data is persisted
          */
         this.setData = function (data, callback) {
+            this.cachedData = data;
             chrome.storage.sync.set(data, callback);
         };
 
         /**
          * Retrieves data from this extension's local storage
          * @param {Function} callback a function to call with the retrieved data
+         * @param {boolean} cached Whether a cached version is preferable
          */
-        this.getData = function (callback) {
+        this.getData = function (callback, cached) {
+            if (cached && this.cachedData) {
+                callback(this.cachedData);
+                return;
+            }
+
             chrome.storage.sync.get(new this.Data(false, [], false), callback);
         };
 
@@ -54,6 +60,11 @@ var ExtConfig = new function () {
             chrome.storage.sync.remove(keys, callback);
         }
     };
+
+    // retrieve the original data to be cached
+    this.Storage.getData((data) => {
+        this.Storage.cachedData = data;
+    });
 
     this.Permissions = new function () {
 
@@ -81,6 +92,12 @@ var ExtConfig = new function () {
                 return { origins: urlPatterns };
             }
         }
+        
+        this.updateCachedPermissions = async function() {
+            browser.permissions.getAll().then((permissions) => {
+                this.cachedPermissions = permissions;
+            });
+        }
 
         /**
          * Requests extension permissions necessary for the provided configuration data
@@ -88,74 +105,53 @@ var ExtConfig = new function () {
          * @param {Function} callback a function to call after the permission has been denied or granted.
          *                            Argument to the function indicates if the permissions were successfully updated
          */
-        this.updatePermissions = function (data, callback) {
+        this.updatePermissions = async function (data) {
             // Generate new origins
             var newPermissions = generatePermissions(data);
             var newOrigins = newPermissions.origins;
+            let oldPermissions = this.cachedPermissions;
 
             // Retrieve old origins
-            chrome.permissions.getAll(function (oldPermissions) {
-                var oldOrigins = oldPermissions.origins;
+            var oldOrigins = oldPermissions.origins;
 
-                // Compare new and old origins
-                var originsToRemove = [];
-                var originsToRequest = [];
-                
-                for(var i = 0; i < oldOrigins.length; i++) {
-                    var origin = oldOrigins[i];
-                    if(!newOrigins.includes(origin)) {
-                        originsToRemove.push(origin);
-                    }
+            // Compare new and old origins
+            var originsToRemove = [];
+            var originsToRequest = [];
+            
+            for(var i = 0; i < oldOrigins.length; i++) {
+                var origin = oldOrigins[i];
+                if(!newOrigins.includes(origin)) {
+                    originsToRemove.push(origin);
                 }
+            }
 
-                for(var i = 0; i < newOrigins.length; i++) {
-                    var origin = newOrigins[i];
-                    if(!oldOrigins.includes(origin)) {
-                        originsToRequest.push(origin);
-                    }
+            for(var i = 0; i < newOrigins.length; i++) {
+                var origin = newOrigins[i];
+                if(!oldOrigins.includes(origin)) {
+                    originsToRequest.push(origin);
                 }
+            }
 
-                // Remove old origins and add new origins if required
+            var success = false;
 
-                if (originsToRemove.length > 0) {
-                    // Remove old permissions
-                    chrome.permissions.remove({
-                        origins: originsToRemove
-                    }, function (removed) {
-                        if (removed) {
-                            // Old permissions removed
-                            // Request new permissions
-                            if (originsToRequest.length > 0) {
-                                chrome.permissions.request({
-                                    origins: originsToRequest
-                                }, callback);
-                            }
-                            else {
-                                // No permissions to add, remove was successful
-                                callback(true);
-                            }
-                        }
-                        else {
-                            // Failed to remove permissions
-                            callback(false);
-                        }
-                    });
-                }
-                else if (originsToRequest.length > 0) {
-                    // No permissions to remove
-                    // Request new permissions
-                    chrome.permissions.request({
-                        origins: originsToRequest
-                    }, callback);
-                }
-                else {
-                    // No permissions to remove or request
-                    callback(true);
-                }
-            });
+            if (originsToRequest.length > 0) {
+                success = await browser.permissions.request({
+                    origins: originsToRequest
+                });
+            }
+
+            if (originsToRemove.length > 0) {
+                success &= await browser.permissions.remove({
+                    origins: originsToRemove
+                });
+            }
+
+            await this.updateCachedPermissions();
+            return success;
         };
-
     };
+
+    this.Permissions.updateCachedPermissions();
 
     this.Events = new function () {
 
@@ -176,17 +172,32 @@ var ExtConfig = new function () {
             "math-view-ext.js"
         ];
 
+        var createJSArray = function (contentJSFile) {
+            var allJS = CORE_JS.slice();
+            allJS.push(contentJSFile);
+            return allJS;
+        };
+
+        var createBrowserJSArray = function (contentJSFile) {
+            return createJSArray(contentJSFile).map(function (file) {
+                return {file};
+            });
+        };
+
+        var createBrowserCSSArray = function() {
+            return CORE_CSS.map(function(file) {
+                return {file};
+            });
+        }
+
         /**
          * Creates a RequestContentScript object containing the CSS and JS files required for operation
          * @param {string} contentJSFile the filename of the content script to use
          */
         var createRequestContentScript = function (contentJSFile) {
-            var allJS = CORE_JS.slice();
-            allJS.push(contentJSFile);
-
             return new chrome.declarativeContent.RequestContentScript({
                 "css": CORE_CSS,
-                "js": allJS
+                "js": createJSArray(contentJSFile)
             });
         };
 
@@ -240,16 +251,77 @@ var ExtConfig = new function () {
             return rules;
         };
 
+        this.contentScripts = [];
+
+        this.clearOldScripts = function() {
+            for (const script of this.contentScripts) {
+                script.unregister()
+            }
+        }
+
+        this.registerContentScripts = function (data) {
+            const contentScriptOpts = [];
+            const css = createBrowserCSSArray();
+            this.clearOldScripts()
+
+            if (data.autoDetectWW) {
+                contentScriptOpts.push({
+                    matches: ['<all_urls>'],
+                    js: createBrowserJSArray(CONTENT_WEBWORK_JS),
+                    css
+                })
+            } else {
+                contentScriptOpts.push({
+                    matches: data.wwHosts.map((host) => `*://${host}/*`),
+                    js: createBrowserJSArray(CONTENT_WEBWORK_JS),
+                    css
+                })
+            }
+
+            if (data.enableWolfram) {
+                contentScriptOpts.push({
+                    matches: [`*://${HOSTNAME_WOLFRAM_ALPHA}/*`],
+                    js: createBrowserJSArray(CONTENT_WOLFRAM_JS),
+                    css
+                })
+            }
+
+            for (const scriptOpts of contentScriptOpts) {
+                if (scriptOpts.matches.length == 0) {
+                    continue
+                }
+
+                browser.contentScripts.register(scriptOpts)
+                    .then((fulfilledContentScript) => this.contentScripts.push(fulfilledContentScript))
+                    .catch((err) => {
+                        console.error("Error registering content script with opts %o with error %o", scriptOpts, err)
+                    })
+            }
+        }
+
         /**
          * Registers rules for the onPageChanged event to trigger our scripts according to the provided configuration data
          * @param {ExtConfig.Storage.Data} data the configuration data
          */
-        this.registerOnPageChangedRules = function (data) {
+        this.registerOnPageChangedRules = function (data, remote) {
+            if (!chrome.declarativeContent) {
+                if (remote) {
+                    browser.runtime.sendMessage({
+                        type: 'cs-update',
+                        data
+                    });
+                    return;
+                }
+
+                this.registerContentScripts(data);
+                return;
+            }
+
             var newRules = generateOnPageChangedRules(data);
 
             chrome.declarativeContent.onPageChanged.removeRules(undefined, function () {
                 chrome.declarativeContent.onPageChanged.addRules(newRules);
-            });
+            })
         };
 
     };

@@ -30,18 +30,19 @@ var migrateHostname = function () {
                     data.wwHosts.push(items.webworkHostname);
                     // Request the new permissions (note if this permission wasn't already granted, this request will fail
                     // since a permission request can only be triggered by a user action)
-                    ExtConfig.Permissions.updatePermissions(data, function (success) {
-                        if(success) {
-                            // Permission was already granted! Register rules and save the data
-                            ExtConfig.Events.registerOnPageChangedRules(data);
-                            ExtConfig.Storage.setData(data, function () {
-                                console.log("[WeBWorK MathView] Migration successful for: " + items.webworkHostname);
-                            });
-                        }
-                        else {
-                            console.log("[WeBWorK MathView] Permission not granted for existing WeBWorK domain");
-                        }
-                    });
+                    ExtConfig.Permissions.updatePermissions(data)
+                        .then(function (success) {
+                            if (success) {
+                                // Permission was already granted! Register rules and save the data
+                                ExtConfig.Events.registerOnPageChangedRules(data);
+                                ExtConfig.Storage.setData(data, function () {
+                                    console.log("[WeBWorK MathView] Migration successful for: " + items.webworkHostname);
+                                });
+                            }
+                            else {
+                                console.log("[WeBWorK MathView] Permission not granted for existing WeBWorK domain");
+                            }
+                        });
                 }
                 else {
                     console.log("[WeBWorK MathView] Existing WeBWorK domain already migrated");
@@ -76,4 +77,13 @@ chrome.runtime.onInstalled.addListener(function (object) {
         var previousVersion = object.previousVersion;
         handleVersions(previousVersion, currentVersion);
     }
+});
+
+browser.runtime.onMessage.addListener((request, sender, sendResponse) => {
+    if (!request || request.type !== 'cs-update' || !request.data) {
+        return;
+    }
+
+    ExtConfig.Events.registerOnPageChangedRules(request.data);
+    sendResponse({});
 });

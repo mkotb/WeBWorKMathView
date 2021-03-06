@@ -22,22 +22,23 @@ function toggleAutoDetect(event) {
     ExtConfig.Storage.getData(function (data) {
         data.autoDetectWW = pendingChecked;
 
-        ExtConfig.Permissions.updatePermissions(data, function (success) {
-            var permissionsMsg = document.getElementById("autoDetectPermissionMsg");
-
-            // If we're just disabling autoDetectWW we don't care if it was successful
-            if(success || (!data.autoDetectWW)) {
-                checkbox.checked = pendingChecked;
-                ExtConfig.Events.registerOnPageChangedRules(data);
-                saveData(data);
-                
-                permissionsMsg.style.display = "none";
-            }
-            else {
-                permissionsMsg.style.display = "block";
-            }
-        });
-    });
+        ExtConfig.Permissions.updatePermissions(data)
+            .then(function (success) {
+                var permissionsMsg = document.getElementById("autoDetectPermissionMsg");
+    
+                // If we're just disabling autoDetectWW we don't care if it was successful
+                if(success || (!data.autoDetectWW)) {
+                    checkbox.checked = pendingChecked;
+                    ExtConfig.Events.registerOnPageChangedRules(data, true);
+                    saveData(data);
+                    
+                    permissionsMsg.style.display = "none";
+                }
+                else {
+                    permissionsMsg.style.display = "block";
+                }
+            });
+    }, true);
 }
 
 function loadData() {
@@ -60,7 +61,7 @@ function loadData() {
             var theHost = data.wwHosts[j];
             addWWHostElement(theHost);
         }
-    });
+    }, true);
 }
 
 function disableManual() {
@@ -105,11 +106,11 @@ function addWWHostElement(text) {
             data.wwHosts.splice(data.wwHosts.indexOf(text), 1);
             console.log(data.wwHosts);
             
-            ExtConfig.Permissions.updatePermissions(data, function (success) {
-                ExtConfig.Events.registerOnPageChangedRules(data);
-
-                saveData(data);
-            });
+            ExtConfig.Permissions.updatePermissions(data)
+                .then(function (success) {
+                    ExtConfig.Events.registerOnPageChangedRules(data, true);
+                    saveData(data);
+                });
         });
     });
 
@@ -143,19 +144,20 @@ function validateWWHost() {
             // Add the hostname we want permission for
             data.wwHosts.push(hostname);
             // Request the new permissions
-            ExtConfig.Permissions.updatePermissions(data, function (success) {
-                if(success) {
-                    // Permission granted! Register rules and save the data
-                    ExtConfig.Events.registerOnPageChangedRules(data);
-                    saveData(data);
-                    hideWWHostInputDialog(); 
-                }
-                else {
-                    // Permission denied :( Show an error
-                    msgElement.textContent = "You must grant the permission to use the extension on this WeBWorK site";
-                }
-            });
-        });
+            ExtConfig.Permissions.updatePermissions(data)
+                .then((success) => {
+                    if (success) {
+                        // Permission granted! Register rules and save the data
+                        ExtConfig.Events.registerOnPageChangedRules(data, true);
+                        saveData(data);
+                        hideWWHostInputDialog(); 
+                    }
+                    else {
+                        // Permission denied :( Show an error
+                        msgElement.textContent = "You must grant the permission to use the extension on this WeBWorK site";
+                    }
+                });
+        }, true);
     }
     else {
         msgElement.textContent = "Invalid URL / Hostname";
